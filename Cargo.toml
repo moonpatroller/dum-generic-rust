@@ -1,0 +1,6 @@
+[package]
+name = "hello-mud"
+version = "0.1.0"
+authors = ["moonpatroller <mrjoshbgoldstein@gmail.com>"]
+
+[dependencies]
