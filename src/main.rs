@@ -1,4 +1,10 @@
+extern crate serde;
+extern crate serde_json;
+
+use serde::{Serialize, Deserialize};
+
 use std::cell::{RefCell};
+use std::fs;
 use std::io;
 use std::io::{Read, Write};
 use std::collections::HashMap;
@@ -28,47 +34,41 @@ impl ClientSource {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct Exit {
-    room_id: u32,
-    direction: String,
+    id: u32,
+    name: String,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct Room {
     id: u32,
+    name: String,
     description: String,
     exits: Vec<Exit>,
 }
 
 struct Area {
-    rooms: HashMap<u32, Room>,
+    rooms: Vec<Room>,
 }
 
 impl Area {
     pub fn new() -> Area {
-        let mut rooms: HashMap<u32, Room> = HashMap::new();
-        rooms.insert(0, Room {
-            id: 0,
-            description: "You're in a cozy tavern warmed by an open fire.".to_string(),
-            exits: vec![
-                Exit {
-                    room_id: 1,
-                    direction: "outside".to_string()
-                }
-            ],
-        });
-        rooms.insert(1, Room {
-            id: 1,
-            description: "You're standing outside a tavern. It's raining.".to_string(),
-            exits: vec![
-                Exit {
-                    room_id: 0,
-                    direction: "inside".to_string()
-                }
-            ],
-        });
         Area {
-            rooms,
+            rooms: load_rooms(),
         }
+    }
+
+    pub fn get_room_by_id_mut(&mut self, id: u32) -> Option<&mut Room> {
+        self.rooms.iter_mut().find(|el| el.id == id)
+    }
+
+    pub fn get_dest_room_id(&mut self, source_room_id: u32, exit_name: &str) -> Option<u32> {
+        self.get_room_by_id_mut(source_room_id).and_then(|initial_room| {
+            initial_room.exits.iter()
+                .find(|e| e.name == exit_name)
+                .map(|exit_to_new_room| exit_to_new_room.id)
+        })
     }
 }
 
@@ -95,9 +95,14 @@ impl Player {
     }
 }
 
+fn load_rooms() -> Vec<Room> {
+    let data = fs::read_to_string("/etc/hosts").expect("Unable to read file");
+    serde_json::from_str(&data).expect("Unable to deserialize json")
+}
+
 fn main() -> io::Result<()> {
     let client_source = ClientSource::new(50000);
-    let area = Area::new();
+    let mut area = Area::new();
     let mut next_id = 0u32;
     let mut players: HashMap<u32, RefCell<Player>> = HashMap::new();
     loop {
@@ -144,7 +149,7 @@ fn main() -> io::Result<()> {
                             });
                     });
                 } else if command == "look" {
-                    area.rooms.get(&p.room_id).map(|room| {
+                    area.get_room_by_id_mut(p.room_id).map(|room| {
                         p.writeln(&room.description);
                         let players_here = players.iter()
                             .filter(|(id, _other_p)| id != &&p.id)
@@ -155,39 +160,40 @@ fn main() -> io::Result<()> {
                             .map(|(_id, other_p)| other_p.borrow().name.clone()).flatten().collect::<Vec<String>>().join(", ");
                         p.writeln(format!("Players here: {}", players_here));
 
-                        let exits_here = room.exits.iter().map(|e| e.direction.clone()).collect::<Vec<String>>().join(", ");
+                        let exits_here = room.exits.iter().map(|e| e.name.clone()).collect::<Vec<String>>().join(", ");
                         p.writeln(format!("Exits are: {}", exits_here));
                     });
                 } else if command.starts_with("go ") {
                     let exit_name = &command[3..];
                     let original_room_id = p.room_id;
-                    area.rooms.get(&original_room_id).map(|initial_room| {
-                        initial_room.exits.iter()
-                            .find(|e| e.direction == exit_name)
-                            .map(|exit_to_new_room| {
-                                p.room_id = exit_to_new_room.room_id;
-                                p.name.iter().for_each(|player_name| {
-                                    imm_players.iter()
-                                        .filter(|(other_player_id, other_player)| *other_player_id != &p.id && other_player.borrow().room_id == original_room_id)
-                                        .for_each(|(_other_player_id, other_player)| {
-                                            other_player.borrow_mut().writeln(format!("{} left to the {}", player_name, exit_name));
-                                        });
-                                    area.rooms.get(&exit_to_new_room.room_id).map(|new_room| {
-                                        new_room.exits.iter()
-                                            .find(|e| e.room_id == original_room_id)
-                                            .map(|exit_back| {
-                                                imm_players.iter()
-                                                    .filter(|(other_player_id, other_player)| *other_player_id != &p.id && other_player.borrow().room_id == new_room.id)
-                                                    .for_each(|(_other_player_id, other_player)| {
-                                                        other_player.borrow_mut().writeln(format!("{} arrived from the {}", player_name, exit_back.direction));
-                                                    });
+                    let dest_room_id_opt: Option<u32> = area.get_dest_room_id(original_room_id, exit_name);
+
+                    dest_room_id_opt.map(|dest_room_id| {
+                        p.room_id = dest_room_id;
+                        p.name.iter().for_each(|player_name| {
+                            imm_players.iter()
+                                .filter(|(other_player_id, other_player)| *other_player_id != &p.id && other_player.borrow().room_id == original_room_id)
+                                .for_each(|(_other_player_id, other_player)| {
+                                    other_player.borrow_mut().writeln(format!("{} left to the {}", player_name, exit_name));
+                                });
+                            area.get_room_by_id_mut(dest_room_id).map(|new_room| {
+                                new_room.exits.iter()
+                                    .find(|e| e.id == original_room_id)
+                                    .map(|exit_back| {
+                                        imm_players.iter()
+                                            .filter(|(other_player_id, other_player)| *other_player_id != &p.id && other_player.borrow().room_id == new_room.id)
+                                            .for_each(|(_other_player_id, other_player)| {
+                                                other_player.borrow_mut().writeln(format!("{} arrived from the {}", player_name, exit_back.name));
                                             });
                                     });
-                                });
                             });
+                        });
                     });
+                    
+                    // If we changed rooms, write new rooom description
+                    // TODO: make this call the 'look' command
                     if original_room_id != p.room_id {
-                        area.rooms.get(&p.room_id).map(|new_room| {
+                        area.get_room_by_id_mut(p.room_id).map(|new_room| {
                             p.writeln(&new_room.description);
                         });
                     }
