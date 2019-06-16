@@ -10,6 +10,7 @@ use std::io::{Read, Write};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 
+
 struct ClientSource {
     server_socket: TcpListener,
 }
@@ -74,6 +75,7 @@ impl Area {
 
 struct Player {
     id: u32,
+    attacking_id: Option<u32>,
     stream: TcpStream,
     name: Option<String>,
     room_id: u32,
@@ -96,7 +98,7 @@ impl Player {
 }
 
 fn load_rooms() -> Vec<Room> {
-    let data = fs::read_to_string("/etc/hosts").expect("Unable to read file");
+    let data = fs::read_to_string("rooms.json").expect("Unable to read file");
     serde_json::from_str(&data).expect("Unable to deserialize json")
 }
 
@@ -109,6 +111,7 @@ fn main() -> io::Result<()> {
         client_source.get_opt().map(|stream| {
             let mut new_player = Player {
                 id: next_id,
+                attacking_id: None,
                 stream, 
                 name: None,
                 room_id: 0,
@@ -197,6 +200,26 @@ fn main() -> io::Result<()> {
                             p.writeln(&new_room.description);
                         });
                     }
+                } else if command.starts_with("attack ") {
+                    let target = &command[7..];
+                    match p.attacking_id {
+                        Some(attacking_id) => p.writeln(format!("You are already attacking {}", imm_players.get(&attacking_id).unwrap().borrow().name.as_ref().or(Some(&String::from("a thing"))).unwrap())),
+                        None => {
+                            let victim_opt = imm_players.iter()
+                                .filter(|(_id, v)| {
+                                    let name_opt_ref: &Option<String> = &v.borrow().name;
+                                    name_opt_ref.as_ref().map(|n| n.starts_with(target)).unwrap_or(false)
+                                }).nth(0).map(|(_id, v)| v);
+                            match victim_opt {
+                                None => p.writeln(format!("You do not see {} anywhere.", target)),
+                                Some(victim_p) => {
+                                    p.writeln(format!("You attack {}.", victim_p.borrow().name.as_ref().unwrap_or(&String::from("someone"))));
+                                    p.attacking_id = Some(victim_p.borrow().id);
+                                },
+                            };
+                        },
+                    };
+                    
                 } else {
                     p.writeln(format!("Unknown command: {}", command));
                 }
