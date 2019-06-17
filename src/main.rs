@@ -47,6 +47,7 @@ struct Room {
     name: String,
     description: String,
     exits: Vec<Exit>,
+    items: Vec<Item>,
 }
 
 struct Area {
@@ -73,12 +74,18 @@ impl Area {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Item {
+    name: String,
+}
+
 struct Player {
     id: u32,
     attacking_id: Option<u32>,
     stream: TcpStream,
     name: Option<String>,
     room_id: u32,
+    items: Vec<Item>,
 }
 
 impl Player {
@@ -115,6 +122,7 @@ fn main() -> io::Result<()> {
                 stream, 
                 name: None,
                 room_id: 0,
+                items: vec![]
             };
             next_id += 1;
             new_player.write("What is your name? ");
@@ -192,7 +200,7 @@ fn main() -> io::Result<()> {
                             });
                         });
                     });
-                    
+
                     // If we changed rooms, write new rooom description
                     // TODO: make this call the 'look' command
                     if original_room_id != p.room_id {
@@ -200,6 +208,7 @@ fn main() -> io::Result<()> {
                             p.writeln(&new_room.description);
                         });
                     }
+
                 } else if command.starts_with("attack ") {
                     let target = &command[7..];
                     match p.attacking_id {
@@ -219,7 +228,41 @@ fn main() -> io::Result<()> {
                             };
                         },
                     };
-                    
+
+                } else if command.starts_with("inv") {
+                    if p.items.is_empty() {
+                        p.writeln("You have nothing.");
+                    } else {
+                        p.writeln("You have:");
+                        let item_string = p.items.iter().map(|i| &*i.name).collect::<Vec<&str>>().join("\r\n");
+                        p.writeln(item_string);
+                    }
+
+                } else if command.starts_with("drop ") {
+                    let target = &command[5..];
+                    match p.items.iter().position(|i| i.name.starts_with(target)) {
+                        None => p.writeln("You don't have that."),
+                        Some(i) => {
+                            let found_item = p.items.swap_remove(i);
+                            let player_drop_msg = format!("You drop {} on the floor.", &found_item.name);
+                            imm_players.get(&p.room_id).unwrap().borrow_mut().items.push(found_item);
+                            p.writeln(player_drop_msg);
+                        },
+                    };
+
+                } else if command.starts_with("take ") {
+                    let target = &command[5..];
+                    let room_items = &mut imm_players.get(&p.room_id).unwrap().borrow_mut().items;
+                    match room_items.iter().position(|i| i.name.starts_with(target)) {
+                        None => p.writeln("You don't see that."),
+                        Some(i) => {
+                            let found_item = room_items.swap_remove(i);
+                            let player_take_msg = format!("You take the {}.", &found_item.name);
+                            p.items.push(found_item);
+                            p.writeln(player_take_msg);
+                        },
+                    };
+
                 } else {
                     p.writeln(format!("Unknown command: {}", command));
                 }
