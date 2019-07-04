@@ -104,6 +104,25 @@ impl Player {
     }
 }
 
+struct PlayerStore {
+    players: HashMap<u32, RefCell<Player>>,
+}
+
+impl PlayerStore {
+    pub fn for_each_in_room(&self, room_id: u32, per_player: fn(&Player) -> ()) {
+        self.players.iter()
+            .filter(|(_pid, p)| p.borrow().room_id == room_id)
+            .for_each(|(_pid, p)| per_player(&p.borrow_mut()));
+    }
+
+    pub fn iter_in_room<T>(&self, room_id: u32) { // Box<dyn Iterator<Item = &Player>> {
+        self.players.iter()
+            .filter(|(_pid, p)| p.borrow().room_id == room_id)
+            .map(|(_pid, p)| p.borrow())
+            .collect::<&Player>()
+    }
+}
+
 fn load_rooms() -> Vec<Room> {
     let data = fs::read_to_string("rooms.json").expect("Unable to read file");
     serde_json::from_str(&data).expect("Unable to deserialize json")
